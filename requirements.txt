@@ -1,0 +1,5 @@
+# Strict pure-python dependencies only (Zero-compilation policy for Android ARM64 Termux)
+flask>=3.0.0,<3.1.0
+werkzeug>=3.0.0,<3.1.0
+pytest>=8.0.0
+

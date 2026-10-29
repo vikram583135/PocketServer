@@ -1,0 +1,11 @@
+.venv/
+venv/
+__pycache__/
+*.pyc
+var/
+logs/
+backups/
+data/
+.mock_termux/
+.pytest_cache/
+
