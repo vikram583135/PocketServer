@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#111827">
+  <title>PocketServer</title>
+  <link rel="stylesheet" href="/static/style.css">
+  <script src="/static/app.js" defer></script>
+</head>
+<body>
+  <header class="topbar"><a class="brand" href="#overview" aria-label="PocketServer overview">PocketServer</a><button id="logout" class="quiet hidden" type="button">Sign out</button></header>
+  <main id="app"><p id="notice" role="status" class="notice hidden"></p>
+    <section id="login-panel" class="panel narrow hidden">
+      <h1>Local administration</h1><p class="muted">Sign in to manage this PocketServer instance.</p>
+      <form id="login-form"><label for="password">Password</label><input id="password" name="password" type="password" autocomplete="current-password" required><button class="primary" type="submit">Sign in</button></form>
+    </section>
+    <section id="dashboard" class="hidden">
+      <div class="welcome"><div><p class="eyebrow">LOCAL CONTROL</p><h1>Dashboard</h1></div><button id="refresh" type="button">Refresh</button></div>
+      <nav id="tabs" aria-label="Dashboard sections">
+        <button data-tab="overview" aria-selected="true">Overview</button><button data-tab="services">Services</button><button data-tab="files">Files</button><button data-tab="git">Git &amp; SSH</button><button data-tab="tunnel">Tunnel</button><button data-tab="logs">Logs</button><button data-tab="doctor">Doctor</button><button data-tab="backups">Backups</button><button data-tab="jobs">Jobs</button>
+      </nav>
+      <div id="content"></div>
+    </section>
+    <section id="reauth-dialog" class="dialog hidden" role="dialog" aria-modal="true" aria-labelledby="reauth-title">
+      <form id="reauth-form" class="panel narrow"><h2 id="reauth-title">Confirm your identity</h2><p class="muted">This action needs a recent password check.</p><label for="reauth-password">Password</label><input id="reauth-password" type="password" autocomplete="current-password" required><div class="actions"><button type="button" id="reauth-cancel">Cancel</button><button class="primary" type="submit">Continue</button></div></form>
+    </section>
+  </main>
+  <footer>Administration is available only on this device.</footer>
+</body>
+</html>

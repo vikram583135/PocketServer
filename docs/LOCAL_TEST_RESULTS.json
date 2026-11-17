@@ -1,0 +1,101 @@
+{
+  "recorded_date": "2026-11-17",
+  "baseline_head": "68c1193",
+  "working_tree_committed": false,
+  "linux": {
+    "platform": "Linux-6.6.87.2-microsoft-standard-WSL2-x86_64-with-glibc2.39",
+    "python": "3.12.3 (main, Nov  6 2025, 13:44:16) [GCC 13.3.0]",
+    "exit_code": 0,
+    "passed": 251,
+    "skipped": 1,
+    "skip_reason": "Windows replacement sharing semantics",
+    "duration_seconds": 108.51,
+    "source_sha256": {
+      "pocketctl.py": "c66cd7828dfe37bd96d5bd25119823e0aa1e294bb9567b354a9f757f2f1ff5ae",
+      "scripts/build_wheelhouse.py": "31ab87ab14d7c55cc377d6b7c911cee6939a2f76d88eaf8078904717040ee709",
+      "scripts/verify_posix.py": "671a6d524ade429b5d8773945aa2fd4d3af7ae62ba2d63065e3f388dee779ce6",
+      "tests/test_state.py": "b344fe5c43b79037bc1d16e0655327f25d7d67e89174f0ab2a4f879f17eb65f2",
+      "tests/test_jobs.py": "251eea1837e1e8a0069aef04edaea1f698a1c721cbdf5710724d8a71076a5803",
+      "tests/test_http_services.py": "606b6a524360fa7bafa349958a497cce988fc9c716d27d3a57ff92d16b7d1f5e",
+      "tests/test_config.py": "478db8c185a0f0c1951357a4fee5624ccdedfe91e0d5e1c62fe07ac40d502563",
+      "tests/test_storage_security.py": "630d43fcb3c1376c3f5d76fbb930b1ea4e43519a6ddac308e22be2925b50c41a",
+      "tests/test_backup_recovery.py": "5142e6346c169cbfaf571cc37c05b79c9fe74af023a9657384cdb4e5dbe24e1b",
+      "tests/test_cli.py": "2c68a16ca951042836f4970e9dbca5cc0c6e2ee762295985517f660afe4e8d73",
+      "tests/test_ssh_git.py": "904d5a6b3fe14a50039fc56c8b7432302e5c425b2c1ae6b96e77c7c692a44b7b",
+      "tests/test_runtime.py": "13c55e9656f6711736024ca3b3404f6a896028378d78001c6ac71b5fb4223f90",
+      "tests/test_installation.py": "14cfd86a9ea07c84d888df16a7505a6e04ac2e5cf4d5ba67f5e01cc566dbd8e3",
+      "tests/test_jobs_posix.py": "9e682fc9580138b596628aabb40eb32c8c8b8010498bb06afb85a293f9a7a70f",
+      "tests/test_auth_api.py": "d7b83f493569e52847b059fe554ad8bfbf6317551be78944ead4510db843648f",
+      "tests/test_tunnel.py": "892ca4ac8fed0e7da999072619c70f8ec6e70ec8823ff91d2d00f5d73fbeb862",
+      "tests/test_supervisor_contract.py": "cfdec7dbc7050b938a5c722804ce4363deddcc0c146730aeefea2c5b46637e95",
+      "tests/conftest.py": "9839d2559cb210ef96e3dd5b176f8b9558eb38217c3cf7e5d9846e0741e2a3ff",
+      "dashboard/auth.py": "745582ecf17cc4e9061b1ecf051edcc85f9bea61330e0ccf42ff09ab975b6377",
+      "dashboard/__init__.py": "3dbdd86b166869a9ffa7b060a8252f674f5431cb3002cb09bfcd1dd59063d15a",
+      "dashboard/app.py": "e6f714c60d52e6142cfd4fe3c497cbe7a1b2ec45180ba680f0a5be3f853c0111",
+      "dashboard/routes.py": "177ffa6222c9739bec583000da8a1415402139dbe4ea44eb4383eafb4bc861db",
+      "core/logs.py": "2b46e6fa5dd0e517818ff7dba0be671ab4777bb36d14df514337801f9fcb4430",
+      "core/supervisor.py": "f18ff259c090f73d2a570aa73726622d6f404393a756e278d9bfbeb89864c756",
+      "core/config.py": "f42de61474806942f29271c93aeef7aac0d47647bfd85f54fd67e9d433de9dac",
+      "core/env.py": "692c5d19b1bdb70c4164608697dba89ee9731db2fff797035f21f366a635725b",
+      "core/doctor.py": "2fb8a6dd0fa38f40d9aed97d9567112b84aae37b5d9d0548b2eefdb503b281a3",
+      "core/boot.py": "a6fd33a3f56d785d472ea9d919d22cfc2671efafff11153a3343d1d38e0f83c9",
+      "core/ssh_git.py": "3bd1dccf424358846862bcd40430310c5e4107178eb31d5d3b3a1942e5f0edf8",
+      "core/storage.py": "bfce2b6804c020b1482b01ab1744f1a1cf719072f0f6897447f0ed0e6c268909",
+      "core/controller.py": "c7c0b4a2eec0cebf6c30604c405b4e17ece63d0536f4e54a821d6f9cbbbcaaf8",
+      "core/runtime.py": "1d55d089738af10ab9f8e9485771a7c3989c080f1035f5f832fda992aebad327",
+      "core/application.py": "ea236375c768e3bbca75175cfc05bca31c1f831ead7dab02346a84783f7ed8b5",
+      "core/tunnel.py": "a95c32e0a0685bc783e01bd0a77e1f3a861411d71b1a77707ccb308a5bd1cd7e",
+      "core/service_entry.py": "4fae784e54621df248f42238e9824d8f51dd971b87dd6bcfecbfad01d8a7eaf7",
+      "core/jobs.py": "2a3257bb2ef73c7b47e73165dcff65d53b018dab84903ee16a69dabe6e68c3e1",
+      "core/services.py": "d6344ef02b4a96a219ef32e4b682c95b22a56fe0fcbae65f399920ec0c3a5b38",
+      "core/__init__.py": "c5c0645a4ea59348a88d17a8b7e8ba58f7d70d37660d2d2f117e837034d8814b",
+      "core/locking.py": "6eef7128062fdeccff1a080cefd678f75675db105f4752725fe9e9736c24d275",
+      "core/state.py": "292addbfcc1cd4dfe7c5fcf5a7a5751ead88e648cf213595478227b128e16339",
+      "core/errors.py": "2b0cf9bc4b80f5ef76f8f3f41c0e17927cbc57fbcc691df94dbdc70354b94775",
+      "core/backups.py": "2334eba417c1504a60389916fae9983d5fe5939ff379837cbc30e01ba0f56014",
+      "core/http_services.py": "3f4890d7c2606d966cc361e865e79620aca9b6e8cbc1dcbf5cd7b3381242749e"
+    }
+  },
+  "windows": {
+    "tests": 252,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 27,
+    "passed": 225,
+    "python": "CPython 3.13",
+    "duration_seconds": 152.034,
+    "timestamp": "2026-11-17T14:26:50.176859+05:30",
+    "exit_code": 0
+  },
+  "javascript": {
+    "command": "node --check dashboard/static/app.js; node --test tests/test_ui.js",
+    "passed": 18,
+    "failed": 0,
+    "live_browser_walkthrough": false
+  },
+  "shell_syntax": {
+    "bootstrap.sh": "passed",
+    "uninstall.sh": "passed"
+  },
+  "offline_packaging": {
+    "packages": 8,
+    "hash_locked": true,
+    "binary_only_install_passed": true,
+    "markupsafe_native_accelerator_removed": true,
+    "physical_termux_qualified": false
+  },
+  "review": {
+    "kluster_available": false,
+    "completed_scans": 0,
+    "issue_counts": null
+  },
+  "remaining_release_gates": [
+    "Physical ARM64 Termux install and wheelhouse qualification",
+    "Real runit/sshd/Git and network publication behavior",
+    "Phone-width browser and keyboard walkthrough",
+    "Actual reboot and Android background/network matrix",
+    "Eight-hour soak and measured resource/logger overshoot",
+    "Successful required kluster review"
+  ],
+  "android_device_check": "adb devices -l returned no attached devices on 2026-11-17"
+}

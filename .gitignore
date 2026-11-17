@@ -26,4 +26,6 @@ data/
 .idea/
 *.swp
 *.swo
+.build/
+.test-venv/
 

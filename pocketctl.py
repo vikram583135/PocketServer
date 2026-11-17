@@ -1,398 +1,284 @@
 #!/usr/bin/env python3
-"""PocketServer Unified Command-Line Interface (pocketctl).
-
-Provides complete lifecycle control, diagnostics, backups, and user management:
-  pocketctl init       - Initialize environment and set admin password
-  pocketctl status     - View service health and system telemetry
-  pocketctl start      - Start service(s)
-  pocketctl stop       - Stop service(s)
-  pocketctl restart    - Restart service(s)
-  pocketctl logs       - Tail service log with credential redaction
-  pocketctl doctor     - Run comprehensive system and Android diagnostics
-  pocketctl backup     - Create compressed .tar.gz archive
-  pocketctl restore    - Restore configuration and data from backup archive
-  pocketctl passwd     - Change admin password
-"""
-
+"""PocketServer CLI: local core operations, explicit mutation, honest exits."""
 from __future__ import annotations
-
 import argparse
-import getpass
+import json
 import os
 import sys
+import uuid
 from pathlib import Path
+from core.application import Application
+from core.config import read_password, validate_config
+from core.errors import PocketError
+from core.runtime import RuntimeContext
+from core.services import SERVICE_PROFILES, seed_default_payloads
 
-# Ensure UTF-8 output encoding on legacy Windows consoles
-if hasattr(sys.stdout, "reconfigure"):
-    try:
-        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
-    except Exception:
-        pass
+def parser():
+    root = argparse.ArgumentParser(prog="pocketctl")
+    root.add_argument("--home")
+    root.add_argument("--env", choices=("auto", "mock", "termux"), default=None)
+    root.add_argument("--json", action="store_true")
+    commands = root.add_subparsers(dest="command", required=True)
+    def command(name, parent=commands):
+        child = parent.add_parser(name)
+        child.add_argument("--json", action="store_true", default=argparse.SUPPRESS)
+        child.add_argument("--home", default=argparse.SUPPRESS)
+        child.add_argument("--env", choices=("auto", "mock", "termux"), default=argparse.SUPPRESS)
+        return child
+    init = command("init"); init.add_argument("--password-stdin", action="store_true")
+    status = command("status"); status.add_argument("target", nargs="?"); status.add_argument("--require-ready", action="store_true")
+    for name in ("start", "stop", "restart"):
+        child = command(name); child.add_argument("target", nargs="?", default="all")
+    for name in ("enable", "disable"):
+        child = command(name); child.add_argument("target", choices=("dashboard", "web", "api", "ssh")); child.add_argument("--revision", type=int)
+    logs = command("logs"); logs.add_argument("target", choices=tuple(SERVICE_PROFILES)); logs.add_argument("--lines", type=int, default=100)
+    doctor = command("doctor"); doctor.add_argument("--strict", action="store_true")
+    password = command("passwd"); password.add_argument("--password-stdin", action="store_true")
+    config = command("config"); sub = config.add_subparsers(dest="config_action", required=True)
+    command("validate", sub)
+    command("rotate-key", sub)
+    migrate = command("migrate", sub); migrate.add_argument("--apply", action="store_true"); migrate.add_argument("--legacy-stopped", action="store_true")
+    setter = command("set", sub); setter.add_argument("field"); setter.add_argument("value"); setter.add_argument("--revision", type=int, required=True)
+    ssh = command("ssh"); keys = ssh.add_subparsers(dest="ssh_action", required=True); key = command("key", keys)
+    key_sub = key.add_subparsers(dest="key_action", required=True)
+    add = command("add", key_sub); add.add_argument("public_key_file"); add.add_argument("--role", choices=("owner", "git"), default="owner"); add.add_argument("--repository", action="append", default=[])
+    command("list", key_sub)
+    remove = command("remove", key_sub); remove.add_argument("fingerprint")
+    git = command("git"); git_sub = git.add_subparsers(dest="git_action", required=True)
+    create = command("create", git_sub); create.add_argument("name")
+    command("list", git_sub)
+    job = command("job"); job_sub = job.add_subparsers(dest="job_action", required=True)
+    register = command("register", job_sub); register.add_argument("id"); register.add_argument("script"); register.add_argument("--arg", action="append", default=[]); register.add_argument("--cwd"); register.add_argument("--timeout", type=int)
+    run = command("run", job_sub); run.add_argument("id"); run.add_argument("--parameters", default="{}")
+    cancel = command("cancel", job_sub); cancel.add_argument("id")
+    command("list", job_sub)
+    job_status = command("status", job_sub); job_status.add_argument("id")
+    tunnel = command("tunnel"); tunnel_sub = tunnel.add_subparsers(dest="tunnel_action", required=True)
+    publish = command("publish", tunnel_sub); publish.add_argument("target", choices=("web", "api")); publish.add_argument("--acknowledge-public", action="store_true")
+    command("stop", tunnel_sub); command("status", tunnel_sub)
+    backup = command("backup"); backup.add_argument("--external-writers-stopped", action="store_true")
+    backup_sub = backup.add_subparsers(dest="backup_action")
+    backup_create = command("create", backup_sub); backup_create.add_argument("--external-writers-stopped", action="store_true", default=argparse.SUPPRESS)
+    command("list", backup_sub)
+    backup_validate = command("validate", backup_sub); backup_validate.add_argument("archive")
+    backup_import = command("import-legacy", backup_sub); backup_import.add_argument("archive")
+    restore = command("restore"); restore.add_argument("archive"); restore.add_argument("--apply", action="store_true"); restore.add_argument("--trust-executable-content", action="store_true"); restore.add_argument("--external-writers-stopped", action="store_true")
+    recover = command("recover"); recovery_kind = recover.add_mutually_exclusive_group(); recovery_kind.add_argument("--config", action="store_true"); recovery_kind.add_argument("--state", action="store_true"); recover.add_argument("--apply", action="store_true")
+    boot = command("boot"); boot_sub = boot.add_subparsers(dest="boot_action", required=True)
+    for name in ("install", "remove", "reconcile", "status"):
+        command(name, boot_sub)
+    serve = command("serve"); serve.add_argument("--foreground", action="store_true", required=True); serve.add_argument("--service", choices=("dashboard", "web", "api"), default="dashboard")
+    install = command("install"); install.add_argument("--source", required=True); install.add_argument("--install-root"); install.add_argument("--wheelhouse"); install.add_argument("--password-stdin", action="store_true"); install.add_argument("--allow-unqualified", action="store_true")
+    setup = command("services-install")
+    uninstall = command("uninstall"); uninstall.add_argument("--purge-data", action="store_true"); uninstall.add_argument("--yes-purge-data", action="store_true")
+    return root
 
-# Ensure repository root is on sys.path
-REPO_ROOT = Path(__file__).resolve().parent
-if str(REPO_ROOT) not in sys.path:
-    sys.path.insert(0, str(REPO_ROOT))
+def _error_exit(error):
+    if error.code in {"recovery_required", "durability_uncertain", "migration_required"}:
+        return 5
+    if error.code in {"busy", "timeout", "lock_timeout"}:
+        return 4
+    if error.code in {"unsupported", "backend_unavailable", "controller_unavailable", "not_installed"}:
+        return 3
+    if error.code.startswith(("invalid", "unknown")) or error.code in {"unsafe_path", "not_initialized"}:
+        return 2
+    return 1
 
-from core.config import ConfigManager
-from core.doctor import (
-    create_backup,
-    install_boot_script,
-    restore_backup,
-    run_diagnostics,
-)
-from core.env import (
-    ensure_runtime_dirs,
-    get_base_dir,
-    get_system_metrics,
-    is_mock_mode,
-    is_termux,
-)
-from core.services import SERVICE_PROFILES
-from core.supervisor import Supervisor
-
-
-def _format_bytes(size_bytes: int) -> str:
-    """Format bytes into readable KB/MB."""
-    if size_bytes < 1024:
-        return f"{size_bytes} B"
-    elif size_bytes < 1024 * 1024:
-        return f"{size_bytes / 1024:.1f} KB"
-    return f"{size_bytes / (1024 * 1024):.1f} MB"
-
-
-def cmd_init(args: argparse.Namespace) -> int:
-    """Initialize PocketServer runtime directories and admin credentials."""
-    print("=" * 60)
-    print("  PocketServer Initialization")
-    print("=" * 60)
-
-    ensure_runtime_dirs()
-    cfg_mgr = ConfigManager()
-    base_dir = get_base_dir()
-
-    print(f"[*] Base Directory: {base_dir}")
-    print(f"[*] Environment:    {'Real Termux' if is_termux() else 'Mock Mode'}")
-
-    # Check or set admin password
-    if cfg_mgr.is_initialized() and not args.force:
-        print("[+] Admin password is already configured.")
+def _aggregate(app, action):
+    supervisor = app.supervisor
+    cfg = app.config.get_config()
+    statuses = supervisor.status()
+    order = ("tunnel", "ssh", "api", "web", "dashboard", "controller")
+    if action == "start":
+        selected = [sid for sid in ("web", "api", "ssh", "dashboard") if (cfg["dashboard"] if sid == "dashboard" else cfg["services"][sid])["autostart"]]
+        if not selected:
+            raise PocketError("invalid_input", "No private autostart services are selected; use enable first.")
+        targets = ["controller"] + selected
     else:
-        password = args.password
-        if not password:
-            while True:
-                p1 = getpass.getpass("Enter new admin password: ")
-                if len(p1) < 4:
-                    print("[-] Password must be at least 4 characters long. Try again.")
-                    continue
-                p2 = getpass.getpass("Confirm admin password: ")
-                if p1 != p2:
-                    print("[-] Passwords do not match. Try again.")
-                    continue
-                password = p1
-                break
-
-        cfg_mgr.set_admin_password(password)
-        print("[+] Admin password set successfully (PBKDF2-SHA256).")
-
-    # Generate or show secret key
-    secret_key = cfg_mgr.get_or_create_secret_key()
-    print(f"[+] Session Secret Key: Verified ({len(secret_key)} hex chars)")
-
-    # Seed default payloads
-    Supervisor(cfg_mgr)
-    print("[+] Default payloads seeded (data/www/index.html & data/api/server.py)")
-
-    metrics = get_system_metrics()
-    lan_ip = metrics["network"]["lan_ip"]
-    dash_port = cfg_mgr.get_config().get("dashboard", {}).get("port", 8888)
-
-    print("-" * 60)
-    print("Initialization complete! Ready to start PocketServer.")
-    print(f"Run: python pocketctl.py start dashboard")
-    print(f"Dashboard URL: http://{lan_ip}:{dash_port} (or http://127.0.0.1:{dash_port})")
-    print("-" * 60)
-    return 0
-
-
-def cmd_status(args: argparse.Namespace) -> int:
-    """Display live service status table and system telemetry."""
-    supervisor = Supervisor()
-    cfg = supervisor.config_manager.get_config()
-
-    if args.service:
-        s_id = args.service.lower()
-        if s_id not in SERVICE_PROFILES:
-            print(f"[-] Unknown service '{s_id}'. Available: {list(SERVICE_PROFILES.keys())}")
-            return 1
-        st = supervisor.status(s_id)
-        print(f"Service: {st['service']} ({st['name']})")
-        print(f"Status:  {'RUNNING' if st['running'] else 'STOPPED'}")
-        print(f"PID:     {st['pid'] or 'N/A'}")
-        print(f"Port:    {st['port'] or 'N/A'}")
-        print(f"Healthy: {'YES' if st['healthy'] else 'NO'}")
-        print(f"Uptime:  {st['uptime_seconds']}s")
-        return 0
-
-    # System Overview
-    metrics = get_system_metrics()
-    mem = metrics["memory"]
-    disk = metrics["storage"]
-    net = metrics["network"]
-
-    print("=" * 72)
-    print("  PocketServer System & Service Status")
-    print("=" * 72)
-    print(f"Environment: {'Termux' if is_termux() else 'Mock'}  |  LAN IP: {net['lan_ip']}  |  VPN: {net['vpn_ip'] or 'None'}")
-    print(f"RAM: {mem['used_mb']} MB / {mem['total_mb']} MB ({mem['used_pct']}%)  |  Disk: {disk['free_mb']} MB free  |  Wake-Lock: {'ACTIVE' if metrics['wake_lock_active'] else 'INACTIVE'}")
-    print("-" * 72)
-
-    # Services Table
-    headers = f"{'SERVICE':<12} {'NAME':<24} {'STATUS':<10} {'PORT':<8} {'PID':<8} {'HEALTH':<8} {'UPTIME'}"
-    print(headers)
-    print("-" * 72)
-
-    all_statuses = supervisor.status_all()
-    for s_id, st in all_statuses.items():
-        status_str = "RUNNING" if st["running"] else "STOPPED"
-        port_str = str(st["port"]) if st["port"] else "-"
-        pid_str = str(st["pid"]) if st["pid"] else "-"
-        health_str = "OK" if st["healthy"] else ("FAIL" if st["running"] else "-")
-        uptime_str = f"{st['uptime_seconds']}s" if st["running"] else "-"
-
-        row = f"{s_id:<12} {st['name']:<24} {status_str:<10} {port_str:<8} {pid_str:<8} {health_str:<8} {uptime_str}"
-        print(row)
-
-    print("=" * 72)
-    return 0
-
-
-def cmd_start(args: argparse.Namespace) -> int:
-    """Start a specific service or all services."""
-    supervisor = Supervisor()
-    target = args.service.lower()
-
-    if target == "all":
-        services_to_start = ["dashboard", "web", "api"]
-        for s in services_to_start:
+        targets = [sid for sid in order if statuses[sid]["running"] or statuses[sid].get("owned")]
+    results, errors = {}, {}
+    if action == "stop":
+        app.jobs.shutdown_owned()
+    if action in ("stop", "restart"):
+        for sid in targets:
             try:
-                st = supervisor.start(s)
-                print(f"[+] Started '{s}' (PID: {st['pid']}, Port: {st['port']})")
-            except Exception as e:
-                print(f"[-] Failed to start '{s}': {e}")
-        return 0
-
-    if target not in SERVICE_PROFILES:
-        print(f"[-] Unknown service '{target}'. Available: {list(SERVICE_PROFILES.keys())} or 'all'")
-        return 1
-
-    try:
-        st = supervisor.start(target)
-        print(f"[+] Successfully started '{target}' (PID: {st['pid']}, Port: {st['port'] or 'N/A'})")
-        return 0
-    except Exception as e:
-        print(f"[-] Error: {e}")
-        return 1
-
-
-def cmd_stop(args: argparse.Namespace) -> int:
-    """Stop a specific service or all services."""
-    supervisor = Supervisor()
-    target = args.service.lower()
-
-    if target == "all":
-        for s in SERVICE_PROFILES:
-            st = supervisor.stop(s)
-            if st["running"] is False and "stopped" in st.get("message", ""):
-                print(f"[+] Stopped '{s}'")
-        print("[+] All services stopped.")
-        return 0
-
-    if target not in SERVICE_PROFILES:
-        print(f"[-] Unknown service '{target}'. Available: {list(SERVICE_PROFILES.keys())} or 'all'")
-        return 1
-
-    st = supervisor.stop(target)
-    print(f"[+] {st.get('message', f'Service {target} stopped.')}")
-    return 0
-
-
-def cmd_restart(args: argparse.Namespace) -> int:
-    """Restart a specific service or all services."""
-    supervisor = Supervisor()
-    target = args.service.lower()
-
-    if target == "all":
-        cmd_stop(args)
-        cmd_start(args)
-        return 0
-
-    if target not in SERVICE_PROFILES:
-        print(f"[-] Unknown service '{target}'.")
-        return 1
-
-    try:
-        st = supervisor.restart(target)
-        print(f"[+] Restarted '{target}' (PID: {st['pid']})")
-        return 0
-    except Exception as e:
-        print(f"[-] Error restarting '{target}': {e}")
-        return 1
-
-
-def cmd_logs(args: argparse.Namespace) -> int:
-    """Display service log output."""
-    supervisor = Supervisor()
-    target = args.service.lower()
-
-    if target not in SERVICE_PROFILES:
-        print(f"[-] Unknown service '{target}'. Available: {list(SERVICE_PROFILES.keys())}")
-        return 1
-
-    output = supervisor.get_logs(target, lines=args.lines, redact=not args.no_redact)
-    print(f"--- [Logs: {target} (last {args.lines} lines)] ---")
-    print(output.rstrip())
-    return 0
-
-
-def cmd_doctor(args: argparse.Namespace) -> int:
-    """Execute complete system and Android limitation diagnostics."""
-    if args.fix_boot:
-        path = install_boot_script()
-        print(f"[+] Installed Termux:Boot auto-start script at: {path}")
-
-    diag = run_diagnostics()
-
-    status_symbol = {
-        "PASS": "[PASS]",
-        "WARN": "[WARN]",
-        "FAIL": "[FAIL]",
-        "INFO": "[INFO]",
-    }
-
-    print("=" * 72)
-    print(f"  PocketServer Diagnostics — Status: {diag['status']}")
-    print("=" * 72)
-    print(f"Checks: {diag['pass_count']} Passed, {diag['warn_count']} Warnings, {diag['fail_count']} Failed")
-    print("-" * 72)
-
-    for c in diag["checks"]:
-        sym = status_symbol.get(c["status"], "[?]")
-        print(f"{sym:<8} {c['name']:<32} {c['message']}")
-        if c.get("remediation"):
-            print(f"         --> Remediation: {c['remediation']}")
-
-    print("=" * 72)
-    return 1 if diag["fail_count"] > 0 else 0
-
-
-def cmd_backup(args: argparse.Namespace) -> int:
-    """Create a compressed .tar.gz archive of configuration and data."""
-    try:
-        archive_path = create_backup()
-        size_str = _format_bytes(archive_path.stat().st_size)
-        print(f"[+] Backup created successfully!")
-        print(f"[*] Archive: {archive_path}")
-        print(f"[*] Size:    {size_str}")
-        return 0
-    except Exception as e:
-        print(f"[-] Failed to create backup: {e}")
-        return 1
-
-
-def cmd_restore(args: argparse.Namespace) -> int:
-    """Restore configuration and data from an archive."""
-    archive_path = Path(args.archive_file).resolve()
-    print(f"[*] Restoring from: {archive_path}")
-
-    try:
-        res = restore_backup(archive_path)
-        print(f"[+] Successfully restored {res['restored_count']} files!")
-        return 0
-    except Exception as e:
-        print(f"[-] Restore failed: {e}")
-        return 1
-
-
-def cmd_passwd(args: argparse.Namespace) -> int:
-    """Safely update the administrative password."""
-    cfg_mgr = ConfigManager()
-    while True:
-        p1 = getpass.getpass("Enter new admin password: ")
-        if len(p1) < 4:
-            print("[-] Password must be at least 4 characters long.")
+                results[sid] = supervisor.stop(sid)
+            except PocketError as exc:
+                errors[sid] = {"code": exc.code, "message": exc.message}
+        if action == "stop":
+            return {"ok": not errors, "results": results, "errors": errors}
+        if "tunnel" in targets:
+            results["tunnel"] = {"running": False, "reason": "publication_reapproval_required"}
+        targets = (["controller"] if targets else []) + [sid for sid in ("web", "api", "ssh", "dashboard") if sid in targets]
+    for sid in targets:
+        if sid in errors:
             continue
-        p2 = getpass.getpass("Confirm new admin password: ")
-        if p1 != p2:
-            print("[-] Passwords do not match.")
+        if sid != "controller" and "controller" in errors:
+            errors[sid] = {"code": "controller_unavailable", "message": "Controller activation failed."}
             continue
-        cfg_mgr.set_admin_password(p1)
-        print("[+] Admin password updated successfully.")
-        return 0
+        try:
+            results[sid] = supervisor.start(sid)
+        except PocketError as exc:
+            errors[sid] = {"code": exc.code, "message": exc.message}
+    return {"ok": not errors, "results": results, "errors": errors}
 
+def execute(args, app):
+    name = args.command
+    if name == "init":
+        app.initialize(read_password(args.password_stdin))
+        seed_default_payloads(app.context)
+        return {"initialized": True, "mode": app.context.mode, "runtime_root": str(app.context.root)}
+    if name == "status":
+        result = app.supervisor.status(args.target) if args.target else app.status()
+        statuses = {args.target: result} if args.target else result["services"]
+        if args.require_ready and not all(item["ready"] for item in statuses.values() if item.get("autostart") or args.target):
+            return {"ok": False, "status": result}
+        return result
+    if name in ("start", "stop", "restart"):
+        return _aggregate(app, name) if args.target == "all" else getattr(app.supervisor, name)(args.target)
+    if name in ("enable", "disable"):
+        app.config.update_service(args.target, {"autostart": name == "enable"}, expected_revision=args.revision)
+        return {"service": args.target, "autostart": name == "enable", "revision": app.config.get_config()["revision"]}
+    if name == "logs":
+        return {"service": args.target, "text": app.supervisor.get_logs(args.target, args.lines)}
+    if name == "doctor":
+        from core.doctor import run_diagnostics
+        result = run_diagnostics(app.config, app.context)
+        if args.strict and any(check["required"] and check["state"] in ("WARN", "UNKNOWN") for check in result["checks"]):
+            result["ok"] = False
+        return result
+    if name == "passwd":
+        app.config.set_admin_password(read_password(args.password_stdin))
+        return {"password_changed": True, "sessions_revoked": True}
+    if name == "config":
+        if args.config_action == "rotate-key":
+            app.config.rotate_secret_key()
+            return {"signing_key_rotated": True, "sessions_revoked": True}
+        if args.config_action == "validate":
+            cfg = app.config.get_config(); validate_config(cfg)
+            return {"valid": True, "schema_version": cfg["schema_version"], "revision": cfg["revision"]}
+        if args.config_action == "migrate":
+            return app.config.migrate(apply=args.apply, legacy_stopped=args.legacy_stopped)
+        pieces = args.field.split(".")
+        if len(pieces) < 2 or pieces[0] not in {"dashboard", "services", "files", "power", "logs", "jobs"} or any(not piece for piece in pieces):
+            raise PocketError("invalid_input", "Choose an existing noncredential configuration field.")
+        try:
+            value = json.loads(args.value)
+        except ValueError:
+            value = args.value
+        def change(cfg):
+            destination = cfg
+            for piece in pieces[:-1]:
+                if not isinstance(destination, dict) or piece not in destination:
+                    raise PocketError("invalid_input", "Unknown configuration field.")
+                destination = destination[piece]
+            if not isinstance(destination, dict) or pieces[-1] not in destination:
+                raise PocketError("invalid_input", "Unknown configuration field.")
+            destination[pieces[-1]] = value
+        app.config.transaction(change, expected_revision=args.revision)
+        return {"revision": app.config.get_config()["revision"]}
+    if name == "ssh":
+        if args.key_action == "list":
+            return app.ssh_git.list_keys()
+        if args.key_action == "remove":
+            return app.ssh_git.remove_key(args.fingerprint, local=True)
+        path = Path(args.public_key_file)
+        if path.stat().st_size > 16384:
+            raise PocketError("invalid_key", "The public-key file is too large.")
+        return app.ssh_git.add_key(path.read_text().strip(), args.role, args.repository)
+    if name == "git":
+        return app.ssh_git.create_repo(args.name) if args.git_action == "create" else app.ssh_git.list_repos()
+    if name == "job":
+        if args.job_action == "list": return app.jobs.list()
+        if args.job_action == "status": return app.jobs.get_run(args.id)
+        if args.job_action == "register": return app.jobs.register(args.id, args.script, argv=args.arg, cwd=args.cwd, timeout=args.timeout)
+        if args.job_action == "cancel": return app.jobs.cancel(args.id)
+        try:
+            parameters = json.loads(args.parameters)
+        except ValueError:
+            raise PocketError("invalid_input", "Job parameters must be JSON.")
+        return app.jobs.run(args.id, parameters=parameters)
+    if name == "tunnel":
+        if args.tunnel_action == "publish": return app.tunnel.start(args.target, acknowledge_public=args.acknowledge_public)
+        return getattr(app.tunnel, args.tunnel_action)()
+    if name == "backup":
+        if args.backup_action == "list": return app.backups.list()
+        if args.backup_action == "validate": return app.backups.validate(args.archive)
+        if args.backup_action == "import-legacy": return app.backups.import_legacy(args.archive)
+        return app.backups.create(external_writers_stopped=args.external_writers_stopped)
+    if name == "restore":
+        return app.backups.restore(args.archive, apply=args.apply, trust_executable_content=args.trust_executable_content,
+                                   external_writers_stopped=args.external_writers_stopped)
+    if name == "recover":
+        if args.state:
+            from core.state import StateStore
+            return StateStore(app.context).recover(supervisor=app.supervisor, apply=args.apply)
+        if args.config:
+            return app.config.recover()
+        from core.boot import recover_installation
+        return recover_installation(app.context) or app.backups.recover()
+    if name == "boot":
+        from core.boot import install_boot, remove_boot, reconcile_boot
+        if args.boot_action == "status":
+            path = app.context.root / "state" / "boot.json"
+            if not path.exists(): return {"setup": False, "reboot_verified": False}
+            from core.runtime import read_private
+            return json.loads(read_private(path, 65536))
+        return {"install": install_boot, "remove": remove_boot, "reconcile": reconcile_boot}[args.boot_action](app.context)
+    if name == "services-install":
+        from core.supervisor import install_runit_entries
+        return install_runit_entries(app.context)
+    if name == "serve":
+        from core.service_entry import serve
+        os.environ["POCKETSERVER_RUN_ID"] = uuid.uuid4().hex
+        serve(app.context, args.service)
+        return {"stopped": True}
+    if name == "install":
+        from core.boot import install_application
+        if not app.config.is_initialized():
+            app.initialize(read_password(args.password_stdin))
+            seed_default_payloads(app.context)
+        return install_application(app.context, args.source, install_root=args.install_root, wheelhouse=args.wheelhouse, allow_unqualified=args.allow_unqualified)
+    if name == "uninstall":
+        from core.boot import uninstall_application
+        confirmation = None
+        if args.purge_data:
+            if args.yes_purge_data:
+                confirmation = str(app.context.root)
+            else:
+                sys.stderr.write("Permanently delete runtime data at " + str(app.context.root) + "\n")
+                if not sys.stdin.isatty():
+                    raise PocketError("confirmation_required", "Use --yes-purge-data for deliberate noninteractive purge.", 409)
+                confirmation = input("Type the full runtime root to confirm: ")
+        return uninstall_application(app.context, purge_data=args.purge_data, confirm=confirmation)
+    raise PocketError("invalid_input", "Unknown command.")
 
-def main() -> int:
-    parser = argparse.ArgumentParser(
-        prog="pocketctl",
-        description="PocketServer Unified Controller CLI",
-    )
-    subparsers = parser.add_subparsers(dest="command", required=True)
-
-    # init
-    p_init = subparsers.add_parser("init", help="Initialize runtime directories and set admin password")
-    p_init.add_argument("--password", type=str, help="Admin password (skip interactive prompt)")
-    p_init.add_argument("--force", action="store_true", help="Force overwrite existing password")
-    p_init.set_defaults(func=cmd_init)
-
-    # status
-    p_status = subparsers.add_parser("status", help="Show system and service status")
-    p_status.add_argument("service", nargs="?", help="Optional specific service to inspect")
-    p_status.set_defaults(func=cmd_status)
-
-    # start
-    p_start = subparsers.add_parser("start", help="Start service(s)")
-    p_start.add_argument("service", help="Service ID (web, api, dashboard, ssh, tunnel, all)")
-    p_start.set_defaults(func=cmd_start)
-
-    # stop
-    p_stop = subparsers.add_parser("stop", help="Stop service(s)")
-    p_stop.add_argument("service", help="Service ID (web, api, dashboard, ssh, tunnel, all)")
-    p_stop.set_defaults(func=cmd_stop)
-
-    # restart
-    p_restart = subparsers.add_parser("restart", help="Restart service(s)")
-    p_restart.add_argument("service", help="Service ID (web, api, dashboard, ssh, tunnel, all)")
-    p_restart.set_defaults(func=cmd_restart)
-
-    # logs
-    p_logs = subparsers.add_parser("logs", help="Tail service logs")
-    p_logs.add_argument("service", help="Service ID")
-    p_logs.add_argument("--lines", type=int, default=50, help="Number of lines to tail")
-    p_logs.add_argument("--no-redact", action="store_true", help="Disable secret redaction")
-    p_logs.set_defaults(func=cmd_logs)
-
-    # doctor
-    p_doctor = subparsers.add_parser("doctor", help="Run system diagnostics")
-    p_doctor.add_argument("--fix-boot", action="store_true", help="Generate and install Termux:Boot script")
-    p_doctor.set_defaults(func=cmd_doctor)
-
-    # backup
-    p_backup = subparsers.add_parser("backup", help="Create compressed backup archive")
-    p_backup.set_defaults(func=cmd_backup)
-
-    # restore
-    p_restore = subparsers.add_parser("restore", help="Restore from backup archive")
-    p_restore.add_argument("archive_file", help="Path to .tar.gz archive")
-    p_restore.set_defaults(func=cmd_restore)
-
-    # passwd
-    p_passwd = subparsers.add_parser("passwd", help="Change admin password")
-    p_passwd.set_defaults(func=cmd_passwd)
-
-    args = parser.parse_args()
-    return args.func(args)
-
+def main(argv=None):
+    os.umask(0o077)
+    args = parser().parse_args(argv)
+    request_id = uuid.uuid4().hex
+    try:
+        context = RuntimeContext.discover(root=args.home, mode=args.env)
+        result = execute(args, Application(context))
+        ok = not isinstance(result, dict) or result.get("ok", True)
+        if args.command == "job" and args.job_action == "run" and isinstance(result, dict) and result.get("state") in {"failed", "timed_out", "cancelled", "interrupted"}:
+            ok = False
+        envelope = {"ok": bool(ok), "data": result, "request_id": request_id}
+        code = 0 if ok else 1
+    except PocketError as exc:
+        envelope = {"ok": False, "error": {"code": exc.code, "message": exc.message}, "request_id": request_id}
+        code = _error_exit(exc)
+    except (OSError, ValueError):
+        envelope = {"ok": False, "error": {"code": "operation_failed", "message": "Operation failed; inspect local paths and supplied values."}, "request_id": request_id}
+        code = 1
+    if args.json:
+        print(json.dumps(envelope, ensure_ascii=False, default=str))
+    elif envelope["ok"]:
+        print(json.dumps(envelope["data"], ensure_ascii=False, indent=2, default=str))
+    else:
+        error = envelope.get("error")
+        print(error["code"] + ": " + error["message"] if error else json.dumps(envelope["data"], indent=2, default=str), file=sys.stderr)
+    return code
 
 if __name__ == "__main__":
-    sys.exit(main())
+    raise SystemExit(main())

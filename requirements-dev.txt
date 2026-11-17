@@ -1,0 +1,2 @@
+# Development tools are not installed on the phone.
+pytest>=8.0,<10
